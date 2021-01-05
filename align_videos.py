@@ -5,7 +5,8 @@ import glob
 import argparse
 from shutil import rmtree, move
 from SyncNetInstance import SyncNetInstance
-
+import scenedetect
+from detectors import S3FD
 
 opt = None
 _instance = None
@@ -77,11 +78,11 @@ def remerge_media(output_path, video_path, av_offset, target_fps: float = 30.0, 
     return apath, vpath
 
 
-def do_work(video_path, target_fps: float = 30.0, check: bool = True, aligned_path = None):
+def do_work(video_path, target_fps: float = 30.0, check: bool = True, overwrite: bool = False, aligned_path = None):
     video_path = os.path.abspath(video_path)
     video_name = os.path.splitext(os.path.basename(video_path))[0]
     avoffset_path = os.path.join(os.path.dirname(video_path), f'{video_name}_avoffset.txt')
-    if os.path.exists(avoffset_path):
+    if os.path.exists(avoffset_path) and not overwrite:
         print("Already processed '{}'".format(video_path))
         return
     print("Process '{}'".format(video_path))
@@ -134,6 +135,7 @@ def do_work(video_path, target_fps: float = 30.0, check: bool = True, aligned_pa
 parser = argparse.ArgumentParser(description = "SyncNet")
 parser.add_argument('video_list', type=str, nargs="+")
 parser.add_argument('--aligned_dir', type=str, default=None)
+parser.add_argument('--overwrite', action='store_true')
 parser.add_argument('--initial_model', type=str, default="data/syncnet_v2.model", help='')
 parser.add_argument('--batch_size', type=int, default='20', help='')
 parser.add_argument('--vshift', type=int, default='15', help='')
@@ -153,7 +155,7 @@ video_list = [
 
 for i, video_path in enumerate(video_list):
     print('[{}/{}]'.format(i+1, len(video_list)), end=' ')
-    do_work(video_path, aligned_path=(
+    do_work(video_path, overwrite=opt.overwrite, aligned_path=(
         None if opt.aligned_dir is None else
         os.path.join(opt.aligned_dir, os.path.splitext(os.path.basename(video_path))[0] + ".mp4")
     ))
