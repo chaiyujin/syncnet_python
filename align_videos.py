@@ -1,25 +1,22 @@
 import os
+import re
 import cv2
 import glob
 import argparse
-from shutil import rmtree
+from shutil import rmtree, move
 from SyncNetInstance import SyncNetInstance
 
-# ==================== PARSE ARGUMENT ====================
 
-parser = argparse.ArgumentParser(description = "SyncNet")
-parser.add_argument('--initial_model', type=str, default="data/syncnet_v2.model", help='')
-parser.add_argument('--batch_size', type=int, default='20', help='')
-parser.add_argument('--vshift', type=int, default='15', help='')
-parser.add_argument('--data_dir', type=str, default='data/work', help='')
-opt = parser.parse_args()
-setattr(opt, 'avi_dir',  os.path.join(opt.data_dir, 'pyavi'))
-setattr(opt, 'tmp_dir',  os.path.join(opt.data_dir, 'pytmp'))
-setattr(opt, 'work_dir', os.path.join(opt.data_dir, 'pywork'))
-setattr(opt, 'crop_dir', os.path.join(opt.data_dir, 'pycrop'))
+opt = None
+_instance = None
 
-s = SyncNetInstance()
-s.loadParameters(opt.initial_model)
+
+def get_instance():
+    global _instance
+    if _instance is None:
+        _instance = SyncNetInstance()
+        _instance.loadParameters(opt.initial_model)
+    return _instance
 
 
 def get_offset(video_path, video_name):
@@ -32,8 +29,10 @@ def get_offset(video_path, video_name):
 
     flist = glob.glob(os.path.join(opt.crop_dir, opt.reference, '0*.avi'))
     flist.sort()
-    assert len(flist) == 1
+    if len(flist) != 1:
+        raise Exception("Failed to detect face in {}".format(video_path))
 
+    s = get_instance()
     offset, conf, dist = s.evaluate(opt, videofile=flist[0])
     rmtree(opt.data_dir)
     return offset
@@ -74,41 +73,79 @@ def remerge_media(output_path, video_path, av_offset, target_fps: float = 30.0, 
     if not keep_parts:
         os.remove(vpath)
         os.remove(apath)
+    return apath, vpath
 
 
-def do_work(video_path, target_fps: float = 30.0, check: bool = True, failure_fp = None):
+def do_work(video_path, target_fps: float = 30.0, check: bool = True):
     video_path = os.path.abspath(video_path)
     video_name = os.path.splitext(os.path.basename(video_path))[0]
+    avoffset_path = os.path.join(os.path.dirname(video_path), f'{video_name}_avoffset.txt')
+    if os.path.exists(avoffset_path):
+        print("Already processed '{}'".format(video_path))
+        return
     print("Process '{}'".format(video_path))
 
-    # -------------------------------------------------- get offset -------------------------------------------------- #
     # remerge with target fps
     tmp_path = os.path.join(os.path.dirname(video_path), f'.{video_name}.mp4')
     remerge_media(tmp_path, video_path, 0, target_fps=target_fps, keep_parts=False)
     # get the offset of remerged
-    offset = get_offset(tmp_path, video_name)
-    os.remove(tmp_path)
-    print("Detect AV offset {} for '{}'".format(offset, video_path))
+    try:
+        av_offset = get_offset(tmp_path, video_name)
+        os.remove(tmp_path)
+        print("Detect AV offset {} for '{}'".format(av_offset, video_path))
+    except Exception as e:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        print('[ERROR]:', e)
+        with open(avoffset_path, 'w') as fp:
+            fp.write("NO FACE")
+        return
 
-    # -------------------------------------------------- shift media ------------------------------------------------- #
-    video_dir = os.path.dirname(video_path)
-    new_path = os.path.join(video_dir, f"{video_name}_aligned.mp4")
-    remerge_media(new_path, video_path, offset, target_fps=target_fps, keep_parts=False)
-
-    # debug
     if check:
-        offset = get_offset(new_path, video_name + "_aligned")
-        if offset != 0:
-            print("[Failure]: The offset of aligned video is {}".format(offset))
-            if failure_fp is not None:
-                failure_fp.write(video_path + "\n")
+        # shift
+        video_dir = os.path.dirname(video_path)
+        new_path = os.path.join(video_dir, f"{video_name}_aligned.mp4")
+        apath, vpath = remerge_media(new_path, video_path, av_offset, target_fps=target_fps, keep_parts=True)
+        os.remove(vpath)
+
+        new_offset = get_offset(new_path, video_name + "_aligned")
+
+        if new_offset != 0:
+            os.remove(apath)
+            os.remove(new_path)
+            print("[ERROR]: The offset of aligned video is {}".format(new_offset))
+            with open(avoffset_path, 'w') as fp:
+                fp.write("The detected AV offset doesn't work!")
+            return
+
+        # success
+        move(apath, os.path.splitext(new_path)[0] + ".wav")
+
+    with open(avoffset_path, 'w') as fp:
+        fp.write(str(av_offset * 40))
+
+
+# ==================== PARSE ARGUMENT ====================
+
+parser = argparse.ArgumentParser(description = "SyncNet")
+parser.add_argument('video_list', type=str, nargs="+")
+parser.add_argument('--initial_model', type=str, default="data/syncnet_v2.model", help='')
+parser.add_argument('--batch_size', type=int, default='20', help='')
+parser.add_argument('--vshift', type=int, default='15', help='')
+parser.add_argument('--data_dir', type=str, default='data/work', help='')
+opt = parser.parse_args()
+
+setattr(opt, 'avi_dir',  os.path.join(opt.data_dir, 'pyavi'))
+setattr(opt, 'tmp_dir',  os.path.join(opt.data_dir, 'pytmp'))
+setattr(opt, 'work_dir', os.path.join(opt.data_dir, 'pywork'))
+setattr(opt, 'crop_dir', os.path.join(opt.data_dir, 'pycrop'))
 
 
 video_list = [
-    'videos/example.avi',
-    'videos/obama.mp4'
+    x for x in sorted(opt.video_list)
+    if re.match(r".*_aligned\.mp4$", x) is None
 ]
-with open("failure.txt", "w") as failure_fp:
-    for i, video_path in enumerate(video_list):
-        print('[{}/{}]'.format(i+1, len(video_list)), end=' ')
-        do_work(video_path, check=True, failure_fp=failure_fp)
+
+for i, video_path in enumerate(video_list):
+    print('[{}/{}]'.format(i+1, len(video_list)), end=' ')
+    do_work(video_path)
