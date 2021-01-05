@@ -40,7 +40,8 @@ def get_offset(video_path, video_name):
 
 def remerge_media(output_path, video_path, av_offset, target_fps: float = 30.0, keep_parts = False):
     out_name = os.path.splitext(os.path.basename(output_path))[0]
-    out_dir = os.path.dirname(video_path)
+    out_dir = os.path.dirname(output_path)
+    os.makedirs(out_dir, exist_ok=True)
 
     vpath = os.path.join(out_dir, f"{out_name}_partv.mp4")
     tpath = os.path.join(out_dir, f"{out_name}_parta_tmp.wav")
@@ -76,7 +77,7 @@ def remerge_media(output_path, video_path, av_offset, target_fps: float = 30.0, 
     return apath, vpath
 
 
-def do_work(video_path, target_fps: float = 30.0, check: bool = True):
+def do_work(video_path, target_fps: float = 30.0, check: bool = True, aligned_path = None):
     video_path = os.path.abspath(video_path)
     video_name = os.path.splitext(os.path.basename(video_path))[0]
     avoffset_path = os.path.join(os.path.dirname(video_path), f'{video_name}_avoffset.txt')
@@ -104,7 +105,10 @@ def do_work(video_path, target_fps: float = 30.0, check: bool = True):
     if check:
         # shift
         video_dir = os.path.dirname(video_path)
-        new_path = os.path.join(video_dir, f"{video_name}_aligned.mp4")
+        if aligned_path is None:
+            new_path = os.path.join(video_dir, f"{video_name}_aligned.mp4")
+        else:
+            new_path = aligned_path
         apath, vpath = remerge_media(new_path, video_path, av_offset, target_fps=target_fps, keep_parts=True)
         os.remove(vpath)
 
@@ -129,6 +133,7 @@ def do_work(video_path, target_fps: float = 30.0, check: bool = True):
 
 parser = argparse.ArgumentParser(description = "SyncNet")
 parser.add_argument('video_list', type=str, nargs="+")
+parser.add_argument('--aligned_dir', type=str, default=None)
 parser.add_argument('--initial_model', type=str, default="data/syncnet_v2.model", help='')
 parser.add_argument('--batch_size', type=int, default='20', help='')
 parser.add_argument('--vshift', type=int, default='15', help='')
@@ -148,4 +153,7 @@ video_list = [
 
 for i, video_path in enumerate(video_list):
     print('[{}/{}]'.format(i+1, len(video_list)), end=' ')
-    do_work(video_path)
+    do_work(video_path, aligned_path=(
+        None if opt.aligned_dir is None else
+        os.path.join(opt.aligned_dir, os.path.splitext(os.path.basename(video_path))[0] + ".mp4")
+    ))
